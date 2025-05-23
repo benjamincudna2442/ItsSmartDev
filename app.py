@@ -102,7 +102,7 @@ def api_status():
     Flask endpoint for API status page (GET request).
     Serves the status.html file.
     """
-    return send_file('status.php'), 200
+    return send_file('status.html'), 200
 
 @app.route('/download', methods=['GET'])
 def download():

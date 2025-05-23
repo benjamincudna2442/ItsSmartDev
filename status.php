@@ -1,3 +1,40 @@
+<?php
+// Handle form submission
+$result = null;
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['instagram_url'])) {
+    $url = trim($_POST['instagram_url']);
+    
+    // Basic URL validation
+    if (preg_match('/https:\/\/www\.instagram\.com\/(p|reel)\/[A-Za-z0-9_-]+/', $url)) {
+        $api_url = 'https://its-smart-dev.vercel.app/download?url=' . urlencode($url);
+        
+        // Initialize cURL
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $api_url);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false); // Adjust based on your security needs
+        
+        $response = curl_exec($ch);
+        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        
+        if ($response && $http_code === 200) {
+            $result = json_decode($response, true);
+        } else {
+            $result = [
+                'status' => 'error',
+                'message' => 'API is down, please try again later! 😔'
+            ];
+        }
+    } else {
+        $result = [
+            'status' => 'error',
+            'message' => 'Please enter a valid Instagram post or reel URL! 😔'
+        ];
+    }
+}
+?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -388,14 +425,32 @@
     <section id="try-it" class="container" data-aos="fade-up">
         <h2>Try It Out 🌟</h2>
         <div class="card p-4">
-            <p class="text-center text-success fs-5 mb-4">API Status: <span id="api-status" class="fw-bold">Checking...</span> ⚡️</p>
-            <form id="api-form" class="input-group mb-3" onsubmit="return false;">
+            <p class="text-center text-success fs-5 mb-4">API Status: <span id="api-status" class="fw-bold">Live</span> ⚡️</p>
+            <form id="api-form" class="input-group mb-3" method="POST" action="">
                 <span class="input-group-text"><i class="fa-brands fa-instagram"></i></span>
-                <input id="instagram-url" type="text" class="form-control" placeholder="Enter Instagram post URL (e.g., https://www.instagram.com/p/XXXXX/)" required>
-                <button id="submit-url" class="btn btn-primary" type="button">Get Media URLs</button>
+                <input id="instagram-url" name="instagram_url" type="text" class="form-control" placeholder="Enter Instagram post or reel URL (e.g., https://www.instagram.com/p/XXXXX/ or https://www.instagram.com/reel/XXXXX/)" value="<?php echo isset($_POST['instagram_url']) ? htmlspecialchars($_POST['instagram_url']) : ''; ?>" required>
+                <button id="submit-url" class="btn btn-primary" type="submit">Get Media URLs</button>
             </form>
             <div id="progress-bar" class="progress-bar" style="width: 0%;"></div>
-            <div id="result" class="mt-3"></div>
+            <div id="result" class="mt-3">
+                <?php if ($result): ?>
+                    <?php if ($result['status'] === 'success'): ?>
+                        <div class="alert alert-success" role="alert"><?php echo htmlspecialchars($result['message']); ?> 🌟</div>
+                        <p><strong>Title:</strong> <?php echo htmlspecialchars($result['title'] ?? 'No caption'); ?></p>
+                        <p><strong>Author:</strong> <?php echo htmlspecialchars($result['author'] ?? 'Unknown'); ?></p>
+                        <ul class="list-group">
+                            <?php foreach ($result['media_urls'] as $url): ?>
+                                <li class="list-group-item d-flex justify-content-between align-items-center">
+                                    <a href="<?php echo htmlspecialchars($url); ?>" target="_blank" class="text-accent text-decoration-none"><?php echo htmlspecialchars($url); ?></a>
+                                    <button class="btn btn-sm btn-outline-success btn-copy" data-bs-toggle="tooltip" data-bs-placement="top" title="Copy URL" onclick="copyToClipboard('<?php echo htmlspecialchars($url); ?>')">Copy</button>
+                                </li>
+                            <?php endforeach; ?>
+                        </ul>
+                    <?php else: ?>
+                        <div class="alert alert-danger" role="alert"><?php echo htmlspecialchars($result['message']); ?></div>
+                    <?php endif; ?>
+                <?php endif; ?>
+            </div>
         </div>
     </section>
 
@@ -411,10 +466,11 @@
                 </h2>
                 <div id="collapseApi" class="accordion-collapse collapse show" aria-labelledby="headingApi" data-bs-parent="#docsAccordion">
                     <div class="accordion-body">
-                        <p>Send a GET request to <code>/download</code> with an Instagram post URL as a query parameter.</p>
+                        <p>Send a GET request to <code>/download</code> with an Instagram post or reel URL as a query parameter.</p>
                         <pre>
 <strong>Request Example:</strong>
-curl -X GET "https://your-api-url/download?url=https://www.instagram.com/p/XXXXX/"
+curl -X GET "https://its-smart-dev.vercel.app/download?url=https://www.instagram.com/p/XXXXX/"
+curl -X GET "https://its-smart-dev.vercel.app/download?url=https://www.instagram.com/reel/XXXXX/"
 
 <strong>Response Example (Success):</strong>
 {
@@ -574,25 +630,6 @@ curl -X GET "https://your-api-url/download?url=https://www.instagram.com/p/XXXXX
             window.scrollTo({ top: 0, behavior: 'smooth' });
         });
 
-        // Check API Status
-        async function checkApiStatus() {
-            const statusEl = document.getElementById('api-status');
-            try {
-                const response = await fetch('/download?url=', { method: 'GET' });
-                if (response.ok) {
-                    statusEl.textContent = 'Live';
-                    statusEl.className = 'fw-bold text-success';
-                } else {
-                    statusEl.textContent = 'Down';
-                    statusEl.className = 'fw-bold text-danger';
-                }
-            } catch (error) {
-                statusEl.textContent = 'Down';
-                statusEl.className = 'fw-bold text-danger';
-            }
-        }
-        checkApiStatus();
-
         // Copy to clipboard function
         function copyToClipboard(text) {
             navigator.clipboard.writeText(text).then(() => {
@@ -602,105 +639,14 @@ curl -X GET "https://your-api-url/download?url=https://www.instagram.com/p/XXXXX
             });
         }
 
-        // Debounce function for input validation
-        function debounce(func, wait) {
-            let timeout;
-            return function executedFunction(...args) {
-                const later = () => {
-                    clearTimeout(timeout);
-                    func(...args);
-                };
-                clearTimeout(timeout);
-                timeout = setTimeout(later, wait);
-            };
-        }
-
-        // Real-time URL validation
-        const instagramUrlInput = document.getElementById('instagram-url');
-        instagramUrlInput.addEventListener('input', debounce(() => {
-            const url = instagramUrlInput.value;
-            if (url && url.includes('instagram.com/p/')) {
-                instagramUrlInput.classList.remove('is-invalid');
-                instagramUrlInput.classList.add('is-valid');
-            } else {
-                instagramUrlInput.classList.remove('is-valid');
-                instagramUrlInput.classList.add('is-invalid');
-            }
-        }, 300));
-
-        // Handle form submission
-        document.getElementById('submit-url').addEventListener('click', async () => {
-            const url = instagramUrlInput.value;
-            const resultDiv = document.getElementById('result');
-            const submitBtn = document.getElementById('submit-url');
-            const progressBar = document.getElementById('progress-bar');
-
-            // Basic URL validation
-            if (!url || !url.includes('instagram.com/p/')) {
-                resultDiv.innerHTML = `<div class="alert alert-danger" role="alert">Please enter a valid Instagram post URL! 😔</div>`;
-                return;
-            }
-
-            // Show loading state
-            submitBtn.disabled = true;
-            submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Loading...';
-            resultDiv.innerHTML = '';
-            if (typeof gsap !== 'undefined') {
-                gsap.to(progressBar, { width: '50%', duration: 0.5 });
-            } else {
-                progressBar.style.width = '50%';
-            }
-
-            try {
-                const response = await fetch(`/download?url=${encodeURIComponent(url)}`, {
-                    method: 'GET',
-                    headers: { 'Content-Type': 'application/json' }
-                });
-                const data = await response.json();
-
-                if (typeof gsap !== 'undefined') {
-                    gsap.to(progressBar, { width: '100%', duration: 0.5, onComplete: () => {
-                        gsap.to(progressBar, { width: '0%', duration: 0.3 });
-                    }});
-                } else {
-                    progressBar.style.width = '100%';
-                    setTimeout(() => { progressBar.style.width = '0%'; }, 500);
-                }
-
-                if (data.status === 'success') {
-                    // Trigger confetti on success
-                    confetti({
-                        particleCount: 100,
-                        spread: 70,
-                        origin: { y: 0.6 }
-                    });
-                    resultDiv.innerHTML = `
-                        <div class="alert alert-success" role="alert">${data.message} 🌟</div>
-                        <p><strong>Title:</strong> ${data.title || 'No caption'}</p>
-                        <p><strong>Author:</strong> ${data.author || 'Unknown'}</p>
-                        <ul class="list-group">
-                            ${data.media_urls.map(url => `
-                                <li class="list-group-item d-flex justify-content-between align-items-center">
-                                    <a href="${url}" target="_blank" class="text-accent text-decoration-none">${url}</a>
-                                    <button class="btn btn-sm btn-outline-success btn-copy" data-bs-toggle="tooltip" data-bs-placement="top" title="Copy URL" onclick="copyToClipboard('${url}')">Copy</button>
-                                </li>
-                            `).join('')}
-                        </ul>`;
-                } else {
-                    resultDiv.innerHTML = `<div class="alert alert-danger" role="alert">Error: ${data.message} 😔</div>`;
-                }
-            } catch (error) {
-                if (typeof gsap !== 'undefined') {
-                    gsap.to(progressBar, { width: '0%', duration: 0.3 });
-                } else {
-                    progressBar.style.width = '0%';
-                }
-                resultDiv.innerHTML = `<div class="alert alert-danger" role="alert">API Is Down Sir Try Later 😔</div>`;
-            } finally {
-                submitBtn.disabled = false;
-                submitBtn.innerHTML = 'Get Media URLs';
-            }
-        });
+        // Trigger confetti on page load if successful result
+        <?php if ($result && $result['status'] === 'success'): ?>
+            confetti({
+                particleCount: 100,
+                spread: 70,
+                origin: { y: 0.6 }
+            });
+        <?php endif; ?>
     </script>
 </body>
 </html>

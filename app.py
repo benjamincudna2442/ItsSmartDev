@@ -1,118 +1,114 @@
-from flask import Flask, request, jsonify, send_file  # Added send_file import
-import instaloader
-import os
-import re
-import http.cookiejar
+from flask import Flask, request, jsonify
+import requests
+from bs4 import BeautifulSoup
 
 app = Flask(__name__)
 
-def validate_url(url):
-    pattern = r'instagram\.com/(p|reel|tv)/([A-Za-z0-9-_]+)'
-    match = re.search(pattern, url)
-    if match:
-        return match.group(2)
-    return None
+API_URL = "https://instsaves.pro/wp-json/visolix/api/download"
+HEADERS = {
+    "Content-Type": "application/json",
+    "User-Agent": "Mozilla/5.0"
+}
 
-def load_cookies_from_file(cookies_path):
-    cookies = {}
-    try:
-        cookie_jar = http.cookiejar.MozillaCookieJar()
-        cookie_jar.load(cookies_path, ignore_discard=True, ignore_expires=True)
-        for cookie in cookie_jar:
-            if cookie.name in ["sessionid", "csrftoken"] and cookie.domain == ".instagram.com":
-                cookies[cookie.name] = cookie.value
-        if "sessionid" in cookies and "csrftoken" in cookies:
-            return cookies
-        else:
-            return None
-    except Exception:
-        return None
-
-def get_instagram_post_urls(url, cookies_file="cookies.txt"):
-    result = {
-        "status": "error",
-        "message": "",
-        "media_urls": [],
-        "title": None,
-        "author": None,
-        "developer": "API Developer : @ISmartDevs",
-        "channel": "Updates Channel : @TheSmartDev"
+def fetch_html(insta_url):
+    payload = {
+        "url": insta_url,
+        "format": "",
+        "captcha_response": None
     }
-    
-    shortcode = validate_url(url)
-    if not shortcode:
-        result["message"] = "Please Provide Valid URL"
-        return result
+    response = requests.post(API_URL, json=payload, headers=HEADERS)
+    response.raise_for_status()
+    json_data = response.json()
+    if not json_data.get("status") or not json_data.get("data"):
+        return None
+    return json_data["data"]
 
-    try:
-        loader = instaloader.Instaloader(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36"
-        )
+def parse_media(html_content):
+    soup = BeautifulSoup(html_content, "html.parser")
+    media_boxes = soup.select(".visolix-media-box")
 
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        cookies_path = os.path.join(script_dir, cookies_file)
+    results = []
+    image_count = 1
+    video_count = 1
 
-        if not os.path.isfile(cookies_path):
-            result["message"] = f"Cookies Missing Bro Add Cookies"
-            return result
+    for box in media_boxes:
+        img_tag = box.find("img", recursive=False)
+        preview_img = img_tag["src"] if img_tag else None
 
-        cookies = load_cookies_from_file(cookies_path)
-        if not cookies:
-            result["message"] = "Invalid Cookies Provided Update Cookies"
-            return result
+        download_tag = box.find("a", class_="visolix-download-media", href=True)
+        download_url = download_tag["href"] if download_tag else None
+        download_text = download_tag.text.lower() if download_tag else ""
 
-        loader.context._session.cookies.set("sessionid", cookies["sessionid"], domain=".instagram.com")
-        loader.context._session.cookies.set("csrftoken", cookies["csrftoken"], domain=".instagram.com")
-
-        post = instaloader.Post.from_shortcode(loader.context, shortcode)
-
-        media_urls = []
-        # For videos or images
-        if post.is_video:
-            media_urls.append(post.video_url)
+        if "video" in download_text:
+            label = f"video{video_count}"
+            video_count += 1
+        elif "image" in download_text:
+            label = f"image{image_count}"
+            image_count += 1
+        elif "story" in download_text:
+            label = f"story_video{video_count}"
+            video_count += 1
         else:
-            media_urls.append(post.url)
+            label = "thumbnail"
 
-        # If sidecar (multiple media)
-        if post.typename == "GraphSidecar":
-            for node in post.get_sidecar_nodes():
-                media_urls.append(node.video_url if node.is_video else node.display_url)
+        results.append({
+            "label": label,
+            "thumbnail": preview_img,
+            "download": download_url
+        })
 
-        result["status"] = "success"
-        result["message"] = "Media URLs extracted successfully."
-        result["media_urls"] = media_urls
-        result["title"] = post.caption if post.caption else "No caption"
-        result["author"] = post.owner_username
+    return results
 
-        return result
+@app.route("/")
+def home():
+    return jsonify({
+        "message": "📥 Welcome to Instagram Universal Media Downloader API!",
+        "supported_media": [
+            "Reels",
+            "Posts (Single & Album)",
+            "IGTV",
+            "Stories"
+        ],
+        "usage": "/dl?url=YOUR_INSTAGRAM_LINK",
+        "API Dev": "@TheSmartDev",
+        "API Owner": "@ISmartCoder"
+    })
 
-    except instaloader.exceptions.LoginRequiredException:
-        result["message"] = "Sorry Bro Private Post Need Proper Cookies"
-        return result
-    except instaloader.exceptions.BadResponseException as bre:
-        result["message"] = f"Instagram Meta API Dead"
-        return result
-    except Exception as e:
-        result["message"] = f"Error: {str(e)}"
-        return result
-
-@app.route('/', methods=['GET'])
-def api_status():
-    """
-    Flask endpoint for API status page (GET request).
-    Serves the status.html file.
-    """
-    return send_file('status.html'), 200
-
-@app.route('/download', methods=['GET'])
+@app.route("/dl")
 def download():
     url = request.args.get("url")
     if not url:
-        return jsonify({"status": "error", "message": "URL Required To Download Your Desired Media!"}), 400
+        return jsonify({
+            "error": "Missing 'url' parameter.",
+            "API Dev": "@TheSmartDev",
+            "API Owner": "@ISmartCoder"
+        }), 400
 
-    result = get_instagram_post_urls(url)
-    status_code = 200 if result["status"] == "success" else 400
-    return jsonify(result), status_code
+    try:
+        html = fetch_html(url)
+        if not html:
+            return jsonify({
+                "error": "Media not found or unsupported.",
+                "API Dev": "@TheSmartDev",
+                "API Owner": "@ISmartCoder"
+            }), 404
+
+        media_list = parse_media(html)
+
+        return jsonify({
+            "status": "success",
+            "media_count": len(media_list),
+            "results": media_list,
+            "API Dev": "@TheSmartDev",
+            "API Owner": "@ISmartCoder"
+        })
+
+    except Exception as e:
+        return jsonify({
+            "error": str(e),
+            "API Dev": "@TheSmartDev",
+            "API Owner": "@ISmartCoder"
+        }), 500
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=8080)
